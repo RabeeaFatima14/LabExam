@@ -1,0 +1,83 @@
+---
+- name: Configure EC2 instance with Apache HTTPD
+  hosts: ec2
+  become: true
+  
+  tasks:
+    - name: Update all system packages
+      ansible.builtin.dnf:
+        name: "*"
+        state: latest
+        update_cache: yes
+
+    - name: Check if nginx is installed
+      ansible.builtin.command: rpm -q nginx
+      register: nginx_check
+      ignore_errors: yes
+      changed_when: false
+
+    - name: Stop nginx service if running
+      ansible.builtin.systemd:
+        name: nginx
+        state: stopped
+        enabled: no
+      when: nginx_check.rc == 0
+      ignore_errors: yes
+
+    - name: Uninstall nginx package if present
+      ansible.builtin.dnf:
+        name: nginx
+        state: absent
+      when: nginx_check.rc == 0
+      ignore_errors: yes
+
+    - name: Install Apache HTTPD
+      ansible.builtin.dnf:
+        name: httpd
+        state: present
+
+    - name: Start and enable httpd service
+      ansible.builtin.systemd:
+        name: httpd
+        state: started
+        enabled: yes
+
+    - name: Get IMDSv2 token
+      ansible.builtin.uri:
+        url: http://169.254.169.254/latest/api/token
+        method: PUT
+        headers:
+          X-aws-ec2-metadata-token-ttl-seconds: "21600"
+        return_content: yes
+      register: imds_token
+
+    - name: Fetch public IPv4 using IMDSv2
+      ansible.builtin.uri:
+        url: http://169.254.169.254/latest/meta-data/public-ipv4
+        method: GET
+        headers:
+          X-aws-ec2-metadata-token: "{{ imds_token.content }}"
+        return_content: yes
+      register: public_ip
+
+    - name: Fetch public hostname using IMDSv2
+      ansible.builtin.uri:
+        url: http://169.254.169.254/latest/meta-data/public-hostname
+        method: GET
+        headers:
+          X-aws-ec2-metadata-token: "{{ imds_token.content }}"
+        return_content: yes
+      register: public_hostname
+
+    - name: Print public IP address
+      ansible.builtin.debug:
+        msg: "Instance Public IP: {{ public_ip.content }}"
+
+    - name: Print public hostname
+      ansible.builtin.debug:
+        msg: "Instance Public Hostname: {{ public_hostname.content }}"
+
+    - name: Restart httpd service
+      ansible.builtin.systemd:
+        name: httpd
+        state: restarted
